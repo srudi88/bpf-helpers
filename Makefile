@@ -1,6 +1,8 @@
 PAGE = bpf-helpers
 OUTPUT = out
 
+all: man html
+
 man: $(OUTPUT)/$(PAGE).7
 
 html: $(OUTPUT)/$(PAGE).html
