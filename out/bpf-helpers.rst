@@ -1477,6 +1477,187 @@ HELPERS
 		a non-negative value equal to or less than size on success, or
 		a negative error in case of failure.
 
+**int skb_load_bytes_relative(const struct sk_buff \***\ *skb*\ **, u32** *offset*\ **, void \***\ *to*\ **, u32** *len*\ **, u32** *start_header*\ **)**
+	Description
+		This helper is similar to **bpf_skb_load_bytes**\ () in that
+		it provides an easy way to load *len* bytes from *offset*
+		from the packet associated to *skb*, into the buffer pointed
+		by *to*. The difference to **bpf_skb_load_bytes**\ () is that
+		a fifth argument *start_header* exists in order to select a
+		base offset to start from. *start_header* can be one of:
+
+		**BPF_HDR_START_MAC**
+			Base offset to load data from is *skb*'s mac header.
+		**BPF_HDR_START_NET**
+			Base offset to load data from is *skb*'s network header.
+
+		In general, "direct packet access" is the preferred method to
+		access packet data, however, this helper is in particular useful
+		in socket filters where *skb*\ **->data** does not always point
+		to the start of the mac header and where "direct packet access"
+		is not available.
+
+	Return
+		0 on success, or a negative error in case of failure.
+
+**int bpf_fib_lookup(void \***\ *ctx*\ **, struct bpf_fib_lookup \***\ *params*\ **, int** *plen*\ **, u32** *flags*\ **)**
+	Description
+		Do FIB lookup in kernel tables using parameters in *params*.
+		If lookup is successful and result shows packet is to be
+		forwarded, the neighbor tables are searched for the nexthop.
+		If successful (ie., FIB lookup shows forwarding and nexthop
+		is resolved), the nexthop address is returned in ipv4_dst,
+		ipv6_dst or mpls_out based on family, smac is set to mac
+		address of egress device, dmac is set to nexthop mac address,
+		rt_metric is set to metric from route.
+
+		*plen* argument is the size of the passed in struct.
+		*flags* argument can be one or more BPF_FIB_LOOKUP_ flags:
+
+		**BPF_FIB_LOOKUP_DIRECT** means do a direct table lookup vs
+		full lookup using FIB rules
+		**BPF_FIB_LOOKUP_OUTPUT** means do lookup from an egress
+		perspective (default is ingress)
+
+		*ctx* is either **struct xdp_md** for XDP programs or
+		**struct sk_buff** tc cls_act programs.
+
+	Return
+		Egress device index on success, 0 if packet needs to continue
+		up the stack for further processing or a negative error in case
+		of failure.
+
+**int bpf_sock_hash_update(struct bpf_sock_ops_kern \***\ *skops*\ **, struct bpf_map \***\ *map*\ **, void \***\ *key*\ **, u64** *flags*\ **)**
+	Description
+		Add an entry to, or update a sockhash *map* referencing sockets.
+		The *skops* is used as a new value for the entry associated to
+		*key*. *flags* is one of:
+
+		**BPF_NOEXIST**
+			The entry for *key* must not exist in the map.
+		**BPF_EXIST**
+			The entry for *key* must already exist in the map.
+		**BPF_ANY**
+			No condition on the existence of the entry for *key*.
+
+		If the *map* has eBPF programs (parser and verdict), those will
+		be inherited by the socket being added. If the socket is
+		already attached to eBPF programs, this results in an error.
+	Return
+		0 on success, or a negative error in case of failure.
+
+**int bpf_msg_redirect_hash(struct sk_msg_buff \***\ *msg*\ **, struct bpf_map \***\ *map*\ **, void \***\ *key*\ **, u64** *flags*\ **)**
+	Description
+		This helper is used in programs implementing policies at the
+		socket level. If the message *msg* is allowed to pass (i.e. if
+		the verdict eBPF program returns **SK_PASS**), redirect it to
+		the socket referenced by *map* (of type
+		**BPF_MAP_TYPE_SOCKHASH**) using hash *key*. Both ingress and
+		egress interfaces can be used for redirection. The
+		**BPF_F_INGRESS** value in *flags* is used to make the
+		distinction (ingress path is selected if the flag is present,
+		egress path otherwise). This is the only flag supported for now.
+	Return
+		**SK_PASS** on success, or **SK_DROP** on error.
+
+**int bpf_sk_redirect_hash(struct sk_buff \***\ *skb*\ **, struct bpf_map \***\ *map*\ **, void \***\ *key*\ **, u64** *flags*\ **)**
+	Description
+		This helper is used in programs implementing policies at the
+		skb socket level. If the sk_buff *skb* is allowed to pass (i.e.
+		if the verdeict eBPF program returns **SK_PASS**), redirect it
+		to the socket referenced by *map* (of type
+		**BPF_MAP_TYPE_SOCKHASH**) using hash *key*. Both ingress and
+		egress interfaces can be used for redirection. The
+		**BPF_F_INGRESS** value in *flags* is used to make the
+		distinction (ingress path is selected if the flag is present,
+		egress otherwise). This is the only flag supported for now.
+	Return
+		**SK_PASS** on success, or **SK_DROP** on error.
+
+**int bpf_lwt_push_encap(struct sk_buff \***\ *skb*\ **, u32** *type*\ **, void \***\ *hdr*\ **, u32** *len*\ **)**
+	Description
+		Encapsulate the packet associated to *skb* within a Layer 3
+		protocol header. This header is provided in the buffer at
+		address *hdr*, with *len* its size in bytes. *type* indicates
+		the protocol of the header and can be one of:
+
+		**BPF_LWT_ENCAP_SEG6**
+			IPv6 encapsulation with Segment Routing Header
+			(**struct ipv6_sr_hdr**). *hdr* only contains the SRH,
+			the IPv6 header is computed by the kernel.
+		**BPF_LWT_ENCAP_SEG6_INLINE**
+			Only works if *skb* contains an IPv6 packet. Insert a
+			Segment Routing Header (**struct ipv6_sr_hdr**) inside
+			the IPv6 header.
+
+		A call to this helper is susceptible to change the underlaying
+		packet buffer. Therefore, at load time, all checks on pointers
+		previously done by the verifier are invalidated and must be
+		performed again, if the helper is used in combination with
+		direct packet access.
+	Return
+		0 on success, or a negative error in case of failure.
+
+**int bpf_lwt_seg6_store_bytes(struct sk_buff \***\ *skb*\ **, u32** *offset*\ **, const void \***\ *from*\ **, u32** *len*\ **)**
+	Description
+		Store *len* bytes from address *from* into the packet
+		associated to *skb*, at *offset*. Only the flags, tag and TLVs
+		inside the outermost IPv6 Segment Routing Header can be
+		modified through this helper.
+
+		A call to this helper is susceptible to change the underlaying
+		packet buffer. Therefore, at load time, all checks on pointers
+		previously done by the verifier are invalidated and must be
+		performed again, if the helper is used in combination with
+		direct packet access.
+	Return
+		0 on success, or a negative error in case of failure.
+
+**int bpf_lwt_seg6_adjust_srh(struct sk_buff \***\ *skb*\ **, u32** *offset*\ **, s32** *delta*\ **)**
+	Description
+		Adjust the size allocated to TLVs in the outermost IPv6
+		Segment Routing Header contained in the packet associated to
+		*skb*, at position *offset* by *delta* bytes. Only offsets
+		after the segments are accepted. *delta* can be as well
+		positive (growing) as negative (shrinking).
+
+		A call to this helper is susceptible to change the underlaying
+		packet buffer. Therefore, at load time, all checks on pointers
+		previously done by the verifier are invalidated and must be
+		performed again, if the helper is used in combination with
+		direct packet access.
+	Return
+		0 on success, or a negative error in case of failure.
+
+**int bpf_lwt_seg6_action(struct sk_buff \***\ *skb*\ **, u32** *action*\ **, void \***\ *param*\ **, u32** *param_len*\ **)**
+	Description
+		Apply an IPv6 Segment Routing action of type *action* to the
+		packet associated to *skb*. Each action takes a parameter
+		contained at address *param*, and of length *param_len* bytes.
+		*action* can be one of:
+
+		**SEG6_LOCAL_ACTION_END_X**
+			End.X action: Endpoint with Layer-3 cross-connect.
+			Type of *param*: **struct in6_addr**.
+		**SEG6_LOCAL_ACTION_END_T**
+			End.T action: Endpoint with specific IPv6 table lookup.
+			Type of *param*: **int**.
+		**SEG6_LOCAL_ACTION_END_B6**
+			End.B6 action: Endpoint bound to an SRv6 policy.
+			Type of param: **struct ipv6_sr_hdr**.
+		**SEG6_LOCAL_ACTION_END_B6_ENCAP**
+			End.B6.Encap action: Endpoint bound to an SRv6
+			encapsulation policy.
+			Type of param: **struct ipv6_sr_hdr**.
+
+		A call to this helper is susceptible to change the underlaying
+		packet buffer. Therefore, at load time, all checks on pointers
+		previously done by the verifier are invalidated and must be
+		performed again, if the helper is used in combination with
+		direct packet access.
+	Return
+		0 on success, or a negative error in case of failure.
+
 
 EXAMPLES
 ========

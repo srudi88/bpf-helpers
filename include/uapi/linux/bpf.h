@@ -96,6 +96,8 @@ enum bpf_cmd {
 	BPF_PROG_QUERY,
 	BPF_RAW_TRACEPOINT_OPEN,
 	BPF_BTF_LOAD,
+	BPF_BTF_GET_FD_BY_ID,
+	BPF_TASK_FD_QUERY,
 };
 
 enum bpf_map_type {
@@ -116,6 +118,8 @@ enum bpf_map_type {
 	BPF_MAP_TYPE_DEVMAP,
 	BPF_MAP_TYPE_SOCKMAP,
 	BPF_MAP_TYPE_CPUMAP,
+	BPF_MAP_TYPE_XSKMAP,
+	BPF_MAP_TYPE_SOCKHASH,
 };
 
 enum bpf_prog_type {
@@ -138,6 +142,7 @@ enum bpf_prog_type {
 	BPF_PROG_TYPE_SK_MSG,
 	BPF_PROG_TYPE_RAW_TRACEPOINT,
 	BPF_PROG_TYPE_CGROUP_SOCK_ADDR,
+	BPF_PROG_TYPE_LWT_SEG6LOCAL,
 };
 
 enum bpf_attach_type {
@@ -155,6 +160,8 @@ enum bpf_attach_type {
 	BPF_CGROUP_INET6_CONNECT,
 	BPF_CGROUP_INET4_POST_BIND,
 	BPF_CGROUP_INET6_POST_BIND,
+	BPF_CGROUP_UDP4_SENDMSG,
+	BPF_CGROUP_UDP6_SENDMSG,
 	__MAX_BPF_ATTACH_TYPE
 };
 
@@ -281,8 +288,8 @@ union bpf_attr {
 		char	map_name[BPF_OBJ_NAME_LEN];
 		__u32	map_ifindex;	/* ifindex of netdev to create on */
 		__u32	btf_fd;		/* fd pointing to a BTF type data */
-		__u32	btf_key_id;	/* BTF type_id of the key */
-		__u32	btf_value_id;	/* BTF type_id of the value */
+		__u32	btf_key_type_id;	/* BTF type_id of the key */
+		__u32	btf_value_type_id;	/* BTF type_id of the value */
 	};
 
 	struct { /* anonymous struct used by BPF_MAP_*_ELEM commands */
@@ -343,6 +350,7 @@ union bpf_attr {
 			__u32		start_id;
 			__u32		prog_id;
 			__u32		map_id;
+			__u32		btf_id;
 		};
 		__u32		next_id;
 		__u32		open_flags;
@@ -375,6 +383,22 @@ union bpf_attr {
 		__u32		btf_log_size;
 		__u32		btf_log_level;
 	};
+
+	struct {
+		__u32		pid;		/* input: pid */
+		__u32		fd;		/* input: fd */
+		__u32		flags;		/* input: flags */
+		__u32		buf_len;	/* input/output: buf len */
+		__aligned_u64	buf;		/* input/output:
+						 *   tp_name for tracepoint
+						 *   symbol for kprobe
+						 *   filename for uprobe
+						 */
+		__u32		prog_id;	/* output: prod_id */
+		__u32		fd_type;	/* output: BPF_FD_TYPE_* */
+		__u64		probe_offset;	/* output: probe_offset */
+		__u64		probe_addr;	/* output: probe_addr */
+	} task_fd_query;
 } __attribute__((aligned(8)));
 
 /* The description below is an attempt at providing documentation to eBPF
@@ -1801,6 +1825,187 @@ union bpf_attr {
  * 	Return
  * 		a non-negative value equal to or less than size on success, or
  * 		a negative error in case of failure.
+ *
+ * int skb_load_bytes_relative(const struct sk_buff *skb, u32 offset, void *to, u32 len, u32 start_header)
+ * 	Description
+ * 		This helper is similar to **bpf_skb_load_bytes**\ () in that
+ * 		it provides an easy way to load *len* bytes from *offset*
+ * 		from the packet associated to *skb*, into the buffer pointed
+ * 		by *to*. The difference to **bpf_skb_load_bytes**\ () is that
+ * 		a fifth argument *start_header* exists in order to select a
+ * 		base offset to start from. *start_header* can be one of:
+ *
+ * 		**BPF_HDR_START_MAC**
+ * 			Base offset to load data from is *skb*'s mac header.
+ * 		**BPF_HDR_START_NET**
+ * 			Base offset to load data from is *skb*'s network header.
+ *
+ * 		In general, "direct packet access" is the preferred method to
+ * 		access packet data, however, this helper is in particular useful
+ * 		in socket filters where *skb*\ **->data** does not always point
+ * 		to the start of the mac header and where "direct packet access"
+ * 		is not available.
+ *
+ * 	Return
+ * 		0 on success, or a negative error in case of failure.
+ *
+ * int bpf_fib_lookup(void *ctx, struct bpf_fib_lookup *params, int plen, u32 flags)
+ *	Description
+ *		Do FIB lookup in kernel tables using parameters in *params*.
+ *		If lookup is successful and result shows packet is to be
+ *		forwarded, the neighbor tables are searched for the nexthop.
+ *		If successful (ie., FIB lookup shows forwarding and nexthop
+ *		is resolved), the nexthop address is returned in ipv4_dst,
+ *		ipv6_dst or mpls_out based on family, smac is set to mac
+ *		address of egress device, dmac is set to nexthop mac address,
+ *		rt_metric is set to metric from route.
+ *
+ *             *plen* argument is the size of the passed in struct.
+ *             *flags* argument can be one or more BPF_FIB_LOOKUP_ flags:
+ *
+ *             **BPF_FIB_LOOKUP_DIRECT** means do a direct table lookup vs
+ *             full lookup using FIB rules
+ *             **BPF_FIB_LOOKUP_OUTPUT** means do lookup from an egress
+ *             perspective (default is ingress)
+ *
+ *             *ctx* is either **struct xdp_md** for XDP programs or
+ *             **struct sk_buff** tc cls_act programs.
+ *
+ *     Return
+ *             Egress device index on success, 0 if packet needs to continue
+ *             up the stack for further processing or a negative error in case
+ *             of failure.
+ *
+ * int bpf_sock_hash_update(struct bpf_sock_ops_kern *skops, struct bpf_map *map, void *key, u64 flags)
+ *	Description
+ *		Add an entry to, or update a sockhash *map* referencing sockets.
+ *		The *skops* is used as a new value for the entry associated to
+ *		*key*. *flags* is one of:
+ *
+ *		**BPF_NOEXIST**
+ *			The entry for *key* must not exist in the map.
+ *		**BPF_EXIST**
+ *			The entry for *key* must already exist in the map.
+ *		**BPF_ANY**
+ *			No condition on the existence of the entry for *key*.
+ *
+ *		If the *map* has eBPF programs (parser and verdict), those will
+ *		be inherited by the socket being added. If the socket is
+ *		already attached to eBPF programs, this results in an error.
+ *	Return
+ *		0 on success, or a negative error in case of failure.
+ *
+ * int bpf_msg_redirect_hash(struct sk_msg_buff *msg, struct bpf_map *map, void *key, u64 flags)
+ *	Description
+ *		This helper is used in programs implementing policies at the
+ *		socket level. If the message *msg* is allowed to pass (i.e. if
+ *		the verdict eBPF program returns **SK_PASS**), redirect it to
+ *		the socket referenced by *map* (of type
+ *		**BPF_MAP_TYPE_SOCKHASH**) using hash *key*. Both ingress and
+ *		egress interfaces can be used for redirection. The
+ *		**BPF_F_INGRESS** value in *flags* is used to make the
+ *		distinction (ingress path is selected if the flag is present,
+ *		egress path otherwise). This is the only flag supported for now.
+ *	Return
+ *		**SK_PASS** on success, or **SK_DROP** on error.
+ *
+ * int bpf_sk_redirect_hash(struct sk_buff *skb, struct bpf_map *map, void *key, u64 flags)
+ *	Description
+ *		This helper is used in programs implementing policies at the
+ *		skb socket level. If the sk_buff *skb* is allowed to pass (i.e.
+ *		if the verdeict eBPF program returns **SK_PASS**), redirect it
+ *		to the socket referenced by *map* (of type
+ *		**BPF_MAP_TYPE_SOCKHASH**) using hash *key*. Both ingress and
+ *		egress interfaces can be used for redirection. The
+ *		**BPF_F_INGRESS** value in *flags* is used to make the
+ *		distinction (ingress path is selected if the flag is present,
+ *		egress otherwise). This is the only flag supported for now.
+ *	Return
+ *		**SK_PASS** on success, or **SK_DROP** on error.
+ *
+ * int bpf_lwt_push_encap(struct sk_buff *skb, u32 type, void *hdr, u32 len)
+ *	Description
+ *		Encapsulate the packet associated to *skb* within a Layer 3
+ *		protocol header. This header is provided in the buffer at
+ *		address *hdr*, with *len* its size in bytes. *type* indicates
+ *		the protocol of the header and can be one of:
+ *
+ *		**BPF_LWT_ENCAP_SEG6**
+ *			IPv6 encapsulation with Segment Routing Header
+ *			(**struct ipv6_sr_hdr**). *hdr* only contains the SRH,
+ *			the IPv6 header is computed by the kernel.
+ *		**BPF_LWT_ENCAP_SEG6_INLINE**
+ *			Only works if *skb* contains an IPv6 packet. Insert a
+ *			Segment Routing Header (**struct ipv6_sr_hdr**) inside
+ *			the IPv6 header.
+ *
+ * 		A call to this helper is susceptible to change the underlaying
+ * 		packet buffer. Therefore, at load time, all checks on pointers
+ * 		previously done by the verifier are invalidated and must be
+ * 		performed again, if the helper is used in combination with
+ * 		direct packet access.
+ *	Return
+ * 		0 on success, or a negative error in case of failure.
+ *
+ * int bpf_lwt_seg6_store_bytes(struct sk_buff *skb, u32 offset, const void *from, u32 len)
+ *	Description
+ *		Store *len* bytes from address *from* into the packet
+ *		associated to *skb*, at *offset*. Only the flags, tag and TLVs
+ *		inside the outermost IPv6 Segment Routing Header can be
+ *		modified through this helper.
+ *
+ * 		A call to this helper is susceptible to change the underlaying
+ * 		packet buffer. Therefore, at load time, all checks on pointers
+ * 		previously done by the verifier are invalidated and must be
+ * 		performed again, if the helper is used in combination with
+ * 		direct packet access.
+ *	Return
+ * 		0 on success, or a negative error in case of failure.
+ *
+ * int bpf_lwt_seg6_adjust_srh(struct sk_buff *skb, u32 offset, s32 delta)
+ *	Description
+ *		Adjust the size allocated to TLVs in the outermost IPv6
+ *		Segment Routing Header contained in the packet associated to
+ *		*skb*, at position *offset* by *delta* bytes. Only offsets
+ *		after the segments are accepted. *delta* can be as well
+ *		positive (growing) as negative (shrinking).
+ *
+ * 		A call to this helper is susceptible to change the underlaying
+ * 		packet buffer. Therefore, at load time, all checks on pointers
+ * 		previously done by the verifier are invalidated and must be
+ * 		performed again, if the helper is used in combination with
+ * 		direct packet access.
+ *	Return
+ * 		0 on success, or a negative error in case of failure.
+ *
+ * int bpf_lwt_seg6_action(struct sk_buff *skb, u32 action, void *param, u32 param_len)
+ *	Description
+ *		Apply an IPv6 Segment Routing action of type *action* to the
+ *		packet associated to *skb*. Each action takes a parameter
+ *		contained at address *param*, and of length *param_len* bytes.
+ *		*action* can be one of:
+ *
+ *		**SEG6_LOCAL_ACTION_END_X**
+ *			End.X action: Endpoint with Layer-3 cross-connect.
+ *			Type of *param*: **struct in6_addr**.
+ *		**SEG6_LOCAL_ACTION_END_T**
+ *			End.T action: Endpoint with specific IPv6 table lookup.
+ *			Type of *param*: **int**.
+ *		**SEG6_LOCAL_ACTION_END_B6**
+ *			End.B6 action: Endpoint bound to an SRv6 policy.
+ *			Type of param: **struct ipv6_sr_hdr**.
+ *		**SEG6_LOCAL_ACTION_END_B6_ENCAP**
+ *			End.B6.Encap action: Endpoint bound to an SRv6
+ *			encapsulation policy.
+ *			Type of param: **struct ipv6_sr_hdr**.
+ *
+ * 		A call to this helper is susceptible to change the underlaying
+ * 		packet buffer. Therefore, at load time, all checks on pointers
+ * 		previously done by the verifier are invalidated and must be
+ * 		performed again, if the helper is used in combination with
+ * 		direct packet access.
+ *	Return
+ * 		0 on success, or a negative error in case of failure.
  */
 #define __BPF_FUNC_MAPPER(FN)		\
 	FN(unspec),			\
@@ -1870,7 +2075,16 @@ union bpf_attr {
 	FN(bind),			\
 	FN(xdp_adjust_tail),		\
 	FN(skb_get_xfrm_state),		\
-	FN(get_stack),
+	FN(get_stack),			\
+	FN(skb_load_bytes_relative),	\
+	FN(fib_lookup),			\
+	FN(sock_hash_update),		\
+	FN(msg_redirect_hash),		\
+	FN(sk_redirect_hash),		\
+	FN(lwt_push_encap),		\
+	FN(lwt_seg6_store_bytes),	\
+	FN(lwt_seg6_adjust_srh),	\
+	FN(lwt_seg6_action),
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
  * function eBPF program intends to call
@@ -1929,6 +2143,18 @@ enum bpf_func_id {
 /* Mode for BPF_FUNC_skb_adjust_room helper. */
 enum bpf_adj_room_mode {
 	BPF_ADJ_ROOM_NET,
+};
+
+/* Mode for BPF_FUNC_skb_load_bytes_relative helper. */
+enum bpf_hdr_start_off {
+	BPF_HDR_START_MAC,
+	BPF_HDR_START_NET,
+};
+
+/* Encapsulation type for BPF_FUNC_lwt_push_encap helper. */
+enum bpf_lwt_encap_mode {
+	BPF_LWT_ENCAP_SEG6,
+	BPF_LWT_ENCAP_SEG6_INLINE
 };
 
 /* user accessible mirror of in-kernel sk_buff.
@@ -2064,6 +2290,14 @@ enum sk_action {
 struct sk_msg_md {
 	void *data;
 	void *data_end;
+
+	__u32 family;
+	__u32 remote_ip4;	/* Stored in network byte order */
+	__u32 local_ip4;	/* Stored in network byte order */
+	__u32 remote_ip6[4];	/* Stored in network byte order */
+	__u32 local_ip6[4];	/* Stored in network byte order */
+	__u32 remote_port;	/* Stored in network byte order */
+	__u32 local_port;	/* stored in host byte order */
 };
 
 #define BPF_TAG_SIZE	8
@@ -2085,6 +2319,10 @@ struct bpf_prog_info {
 	__u32 gpl_compatible:1;
 	__u64 netns_dev;
 	__u64 netns_ino;
+	__u32 nr_jited_ksyms;
+	__u32 nr_jited_func_lens;
+	__aligned_u64 jited_ksyms;
+	__aligned_u64 jited_func_lens;
 } __attribute__((aligned(8)));
 
 struct bpf_map_info {
@@ -2098,6 +2336,15 @@ struct bpf_map_info {
 	__u32 ifindex;
 	__u64 netns_dev;
 	__u64 netns_ino;
+	__u32 btf_id;
+	__u32 btf_key_type_id;
+	__u32 btf_value_type_id;
+} __attribute__((aligned(8)));
+
+struct bpf_btf_info {
+	__aligned_u64 btf;
+	__u32 btf_size;
+	__u32 id;
 } __attribute__((aligned(8)));
 
 /* User bpf_sock_addr struct to access socket fields and sockaddr struct passed
@@ -2118,6 +2365,12 @@ struct bpf_sock_addr {
 	__u32 family;		/* Allows 4-byte read, but no write */
 	__u32 type;		/* Allows 4-byte read, but no write */
 	__u32 protocol;		/* Allows 4-byte read, but no write */
+	__u32 msg_src_ip4;	/* Allows 1,2,4-byte read an 4-byte write.
+				 * Stored in network byte order.
+				 */
+	__u32 msg_src_ip6[4];	/* Allows 1,2,4-byte read an 4-byte write.
+				 * Stored in network byte order.
+				 */
 };
 
 /* User bpf_sock_ops struct to access socket values and specify request ops
@@ -2276,6 +2529,66 @@ struct bpf_cgroup_dev_ctx {
 
 struct bpf_raw_tracepoint_args {
 	__u64 args[0];
+};
+
+/* DIRECT:  Skip the FIB rules and go to FIB table associated with device
+ * OUTPUT:  Do lookup from egress perspective; default is ingress
+ */
+#define BPF_FIB_LOOKUP_DIRECT  BIT(0)
+#define BPF_FIB_LOOKUP_OUTPUT  BIT(1)
+
+struct bpf_fib_lookup {
+	/* input */
+	__u8	family;   /* network family, AF_INET, AF_INET6, AF_MPLS */
+
+	/* set if lookup is to consider L4 data - e.g., FIB rules */
+	__u8	l4_protocol;
+	__be16	sport;
+	__be16	dport;
+
+	/* total length of packet from network header - used for MTU check */
+	__u16	tot_len;
+	__u32	ifindex;  /* L3 device index for lookup */
+
+	union {
+		/* inputs to lookup */
+		__u8	tos;		/* AF_INET  */
+		__be32	flowlabel;	/* AF_INET6 */
+
+		/* output: metric of fib result */
+		__u32 rt_metric;
+	};
+
+	union {
+		__be32		mpls_in;
+		__be32		ipv4_src;
+		__u32		ipv6_src[4];  /* in6_addr; network order */
+	};
+
+	/* input to bpf_fib_lookup, *dst is destination address.
+	 * output: bpf_fib_lookup sets to gateway address
+	 */
+	union {
+		/* return for MPLS lookups */
+		__be32		mpls_out[4];  /* support up to 4 labels */
+		__be32		ipv4_dst;
+		__u32		ipv6_dst[4];  /* in6_addr; network order */
+	};
+
+	/* output */
+	__be16	h_vlan_proto;
+	__be16	h_vlan_TCI;
+	__u8	smac[6];     /* ETH_ALEN */
+	__u8	dmac[6];     /* ETH_ALEN */
+};
+
+enum bpf_task_fd_type {
+	BPF_FD_TYPE_RAW_TRACEPOINT,	/* tp name */
+	BPF_FD_TYPE_TRACEPOINT,		/* tp name */
+	BPF_FD_TYPE_KPROBE,		/* (symbol + offset) or addr */
+	BPF_FD_TYPE_KRETPROBE,		/* (symbol + offset) or addr */
+	BPF_FD_TYPE_UPROBE,		/* filename + offset */
+	BPF_FD_TYPE_URETPROBE,		/* filename + offset */
 };
 
 #endif /* _UAPI__LINUX_BPF_H__ */

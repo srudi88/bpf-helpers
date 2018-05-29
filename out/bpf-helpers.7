@@ -1894,6 +1894,240 @@ user stacks (such as stacks for Java programs). To do so, use:
 a non\-negative value equal to or less than size on success, or
 a negative error in case of failure.
 .UNINDENT
+.TP
+.B \fBint skb_load_bytes_relative(const struct sk_buff *\fP\fIskb\fP\fB, u32\fP \fIoffset\fP\fB, void *\fP\fIto\fP\fB, u32\fP \fIlen\fP\fB, u32\fP \fIstart_header\fP\fB)\fP
+.INDENT 7.0
+.TP
+.B Description
+This helper is similar to \fBbpf_skb_load_bytes\fP() in that
+it provides an easy way to load \fIlen\fP bytes from \fIoffset\fP
+from the packet associated to \fIskb\fP, into the buffer pointed
+by \fIto\fP\&. The difference to \fBbpf_skb_load_bytes\fP() is that
+a fifth argument \fIstart_header\fP exists in order to select a
+base offset to start from. \fIstart_header\fP can be one of:
+.INDENT 7.0
+.TP
+.B \fBBPF_HDR_START_MAC\fP
+Base offset to load data from is \fIskb\fP\(aqs mac header.
+.TP
+.B \fBBPF_HDR_START_NET\fP
+Base offset to load data from is \fIskb\fP\(aqs network header.
+.UNINDENT
+.sp
+In general, "direct packet access" is the preferred method to
+access packet data, however, this helper is in particular useful
+in socket filters where \fIskb\fP\fB\->data\fP does not always point
+to the start of the mac header and where "direct packet access"
+is not available.
+.TP
+.B Return
+0 on success, or a negative error in case of failure.
+.UNINDENT
+.TP
+.B \fBint bpf_fib_lookup(void *\fP\fIctx\fP\fB, struct bpf_fib_lookup *\fP\fIparams\fP\fB, int\fP \fIplen\fP\fB, u32\fP \fIflags\fP\fB)\fP
+.INDENT 7.0
+.TP
+.B Description
+Do FIB lookup in kernel tables using parameters in \fIparams\fP\&.
+If lookup is successful and result shows packet is to be
+forwarded, the neighbor tables are searched for the nexthop.
+If successful (ie., FIB lookup shows forwarding and nexthop
+is resolved), the nexthop address is returned in ipv4_dst,
+ipv6_dst or mpls_out based on family, smac is set to mac
+address of egress device, dmac is set to nexthop mac address,
+rt_metric is set to metric from route.
+.sp
+\fIplen\fP argument is the size of the passed in struct.
+\fIflags\fP argument can be one or more 
+.nf
+BPF_FIB_LOOKUP_
+.fi
+ flags:
+.sp
+\fBBPF_FIB_LOOKUP_DIRECT\fP means do a direct table lookup vs
+full lookup using FIB rules
+\fBBPF_FIB_LOOKUP_OUTPUT\fP means do lookup from an egress
+perspective (default is ingress)
+.sp
+\fIctx\fP is either \fBstruct xdp_md\fP for XDP programs or
+\fBstruct sk_buff\fP tc cls_act programs.
+.TP
+.B Return
+Egress device index on success, 0 if packet needs to continue
+up the stack for further processing or a negative error in case
+of failure.
+.UNINDENT
+.TP
+.B \fBint bpf_sock_hash_update(struct bpf_sock_ops_kern *\fP\fIskops\fP\fB, struct bpf_map *\fP\fImap\fP\fB, void *\fP\fIkey\fP\fB, u64\fP \fIflags\fP\fB)\fP
+.INDENT 7.0
+.TP
+.B Description
+Add an entry to, or update a sockhash \fImap\fP referencing sockets.
+The \fIskops\fP is used as a new value for the entry associated to
+\fIkey\fP\&. \fIflags\fP is one of:
+.INDENT 7.0
+.TP
+.B \fBBPF_NOEXIST\fP
+The entry for \fIkey\fP must not exist in the map.
+.TP
+.B \fBBPF_EXIST\fP
+The entry for \fIkey\fP must already exist in the map.
+.TP
+.B \fBBPF_ANY\fP
+No condition on the existence of the entry for \fIkey\fP\&.
+.UNINDENT
+.sp
+If the \fImap\fP has eBPF programs (parser and verdict), those will
+be inherited by the socket being added. If the socket is
+already attached to eBPF programs, this results in an error.
+.TP
+.B Return
+0 on success, or a negative error in case of failure.
+.UNINDENT
+.TP
+.B \fBint bpf_msg_redirect_hash(struct sk_msg_buff *\fP\fImsg\fP\fB, struct bpf_map *\fP\fImap\fP\fB, void *\fP\fIkey\fP\fB, u64\fP \fIflags\fP\fB)\fP
+.INDENT 7.0
+.TP
+.B Description
+This helper is used in programs implementing policies at the
+socket level. If the message \fImsg\fP is allowed to pass (i.e. if
+the verdict eBPF program returns \fBSK_PASS\fP), redirect it to
+the socket referenced by \fImap\fP (of type
+\fBBPF_MAP_TYPE_SOCKHASH\fP) using hash \fIkey\fP\&. Both ingress and
+egress interfaces can be used for redirection. The
+\fBBPF_F_INGRESS\fP value in \fIflags\fP is used to make the
+distinction (ingress path is selected if the flag is present,
+egress path otherwise). This is the only flag supported for now.
+.TP
+.B Return
+\fBSK_PASS\fP on success, or \fBSK_DROP\fP on error.
+.UNINDENT
+.TP
+.B \fBint bpf_sk_redirect_hash(struct sk_buff *\fP\fIskb\fP\fB, struct bpf_map *\fP\fImap\fP\fB, void *\fP\fIkey\fP\fB, u64\fP \fIflags\fP\fB)\fP
+.INDENT 7.0
+.TP
+.B Description
+This helper is used in programs implementing policies at the
+skb socket level. If the sk_buff \fIskb\fP is allowed to pass (i.e.
+if the verdeict eBPF program returns \fBSK_PASS\fP), redirect it
+to the socket referenced by \fImap\fP (of type
+\fBBPF_MAP_TYPE_SOCKHASH\fP) using hash \fIkey\fP\&. Both ingress and
+egress interfaces can be used for redirection. The
+\fBBPF_F_INGRESS\fP value in \fIflags\fP is used to make the
+distinction (ingress path is selected if the flag is present,
+egress otherwise). This is the only flag supported for now.
+.TP
+.B Return
+\fBSK_PASS\fP on success, or \fBSK_DROP\fP on error.
+.UNINDENT
+.TP
+.B \fBint bpf_lwt_push_encap(struct sk_buff *\fP\fIskb\fP\fB, u32\fP \fItype\fP\fB, void *\fP\fIhdr\fP\fB, u32\fP \fIlen\fP\fB)\fP
+.INDENT 7.0
+.TP
+.B Description
+Encapsulate the packet associated to \fIskb\fP within a Layer 3
+protocol header. This header is provided in the buffer at
+address \fIhdr\fP, with \fIlen\fP its size in bytes. \fItype\fP indicates
+the protocol of the header and can be one of:
+.INDENT 7.0
+.TP
+.B \fBBPF_LWT_ENCAP_SEG6\fP
+IPv6 encapsulation with Segment Routing Header
+(\fBstruct ipv6_sr_hdr\fP). \fIhdr\fP only contains the SRH,
+the IPv6 header is computed by the kernel.
+.TP
+.B \fBBPF_LWT_ENCAP_SEG6_INLINE\fP
+Only works if \fIskb\fP contains an IPv6 packet. Insert a
+Segment Routing Header (\fBstruct ipv6_sr_hdr\fP) inside
+the IPv6 header.
+.UNINDENT
+.sp
+A call to this helper is susceptible to change the underlaying
+packet buffer. Therefore, at load time, all checks on pointers
+previously done by the verifier are invalidated and must be
+performed again, if the helper is used in combination with
+direct packet access.
+.TP
+.B Return
+0 on success, or a negative error in case of failure.
+.UNINDENT
+.TP
+.B \fBint bpf_lwt_seg6_store_bytes(struct sk_buff *\fP\fIskb\fP\fB, u32\fP \fIoffset\fP\fB, const void *\fP\fIfrom\fP\fB, u32\fP \fIlen\fP\fB)\fP
+.INDENT 7.0
+.TP
+.B Description
+Store \fIlen\fP bytes from address \fIfrom\fP into the packet
+associated to \fIskb\fP, at \fIoffset\fP\&. Only the flags, tag and TLVs
+inside the outermost IPv6 Segment Routing Header can be
+modified through this helper.
+.sp
+A call to this helper is susceptible to change the underlaying
+packet buffer. Therefore, at load time, all checks on pointers
+previously done by the verifier are invalidated and must be
+performed again, if the helper is used in combination with
+direct packet access.
+.TP
+.B Return
+0 on success, or a negative error in case of failure.
+.UNINDENT
+.TP
+.B \fBint bpf_lwt_seg6_adjust_srh(struct sk_buff *\fP\fIskb\fP\fB, u32\fP \fIoffset\fP\fB, s32\fP \fIdelta\fP\fB)\fP
+.INDENT 7.0
+.TP
+.B Description
+Adjust the size allocated to TLVs in the outermost IPv6
+Segment Routing Header contained in the packet associated to
+\fIskb\fP, at position \fIoffset\fP by \fIdelta\fP bytes. Only offsets
+after the segments are accepted. \fIdelta\fP can be as well
+positive (growing) as negative (shrinking).
+.sp
+A call to this helper is susceptible to change the underlaying
+packet buffer. Therefore, at load time, all checks on pointers
+previously done by the verifier are invalidated and must be
+performed again, if the helper is used in combination with
+direct packet access.
+.TP
+.B Return
+0 on success, or a negative error in case of failure.
+.UNINDENT
+.TP
+.B \fBint bpf_lwt_seg6_action(struct sk_buff *\fP\fIskb\fP\fB, u32\fP \fIaction\fP\fB, void *\fP\fIparam\fP\fB, u32\fP \fIparam_len\fP\fB)\fP
+.INDENT 7.0
+.TP
+.B Description
+Apply an IPv6 Segment Routing action of type \fIaction\fP to the
+packet associated to \fIskb\fP\&. Each action takes a parameter
+contained at address \fIparam\fP, and of length \fIparam_len\fP bytes.
+\fIaction\fP can be one of:
+.INDENT 7.0
+.TP
+.B \fBSEG6_LOCAL_ACTION_END_X\fP
+End.X action: Endpoint with Layer\-3 cross\-connect.
+Type of \fIparam\fP: \fBstruct in6_addr\fP\&.
+.TP
+.B \fBSEG6_LOCAL_ACTION_END_T\fP
+End.T action: Endpoint with specific IPv6 table lookup.
+Type of \fIparam\fP: \fBint\fP\&.
+.TP
+.B \fBSEG6_LOCAL_ACTION_END_B6\fP
+End.B6 action: Endpoint bound to an SRv6 policy.
+Type of param: \fBstruct ipv6_sr_hdr\fP\&.
+.TP
+.B \fBSEG6_LOCAL_ACTION_END_B6_ENCAP\fP
+End.B6.Encap action: Endpoint bound to an SRv6
+encapsulation policy.
+Type of param: \fBstruct ipv6_sr_hdr\fP\&.
+.UNINDENT
+.sp
+A call to this helper is susceptible to change the underlaying
+packet buffer. Therefore, at load time, all checks on pointers
+previously done by the verifier are invalidated and must be
+performed again, if the helper is used in combination with
+direct packet access.
+.TP
+.B Return
+0 on success, or a negative error in case of failure.
+.UNINDENT
 .UNINDENT
 .SH EXAMPLES
 .sp
@@ -1979,5 +2213,8 @@ pointers for network processing are listed in function
 \fBsendmsg\fP(2),
 \fBsocket\fP(7),
 \fBtc\-bpf\fP(8)
+.SH DOCUTILS SYSTEM MESSAGES
+.IP "System Message: ERROR/3 (out/bpf-helpers.rst:, line 1514)"
+Unknown target name: "bpf_fib_lookup".
 .\" Generated by docutils manpage writer.
 .
